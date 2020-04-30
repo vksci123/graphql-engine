@@ -36,6 +36,7 @@ import qualified Hasura.GraphQL.Schema                    as GS
 import qualified Hasura.GraphQL.Validate.Types            as VT
 import qualified Hasura.Incremental                       as Inc
 import qualified Language.GraphQL.Draft.Syntax            as G
+import qualified Data.Environment                         as E
 
 import           Hasura.Db
 import           Hasura.GraphQL.RemoteServer
@@ -102,11 +103,12 @@ mergeCustomTypes gCtxMap remoteSchemaCtx customTypesState = do
 
 buildRebuildableSchemaCache
   :: (HasVersion, MonadIO m, MonadUnique m, MonadTx m, HasHttpManager m, HasSQLGenCtx m)
-  => m (RebuildableSchemaCache m)
-buildRebuildableSchemaCache = do
+  => E.Environment 
+  -> m (RebuildableSchemaCache m)
+buildRebuildableSchemaCache env = do
   catalogMetadata <- liftTx fetchCatalogData
   result <- flip runReaderT CatalogSync $
-    Inc.build buildSchemaCacheRule (catalogMetadata, initialInvalidationKeys)
+    Inc.build (buildSchemaCacheRule env) (catalogMetadata, initialInvalidationKeys)
   pure $ RebuildableSchemaCache (Inc.result result) initialInvalidationKeys (Inc.rebuildRule result)
 
 newtype CacheRWT m a
@@ -155,8 +157,9 @@ buildSchemaCacheRule
   -- what we want!
   :: ( HasVersion, ArrowChoice arr, Inc.ArrowDistribute arr, Inc.ArrowCache m arr
      , MonadIO m, MonadTx m, MonadReader BuildReason m, HasHttpManager m, HasSQLGenCtx m )
-  => (CatalogMetadata, InvalidationKeys) `arr` SchemaCache
-buildSchemaCacheRule = proc (catalogMetadata, invalidationKeys) -> do
+  => E.Environment
+  -> (CatalogMetadata, InvalidationKeys) `arr` SchemaCache
+buildSchemaCacheRule env = proc (catalogMetadata, invalidationKeys) -> do
   invalidationKeysDep <- Inc.newDependency -< invalidationKeys
 
   -- Step 1: Process metadata and collect dependency information.
@@ -390,7 +393,7 @@ buildSchemaCacheRule = proc (catalogMetadata, invalidationKeys) -> do
         buildRemoteSchema = Inc.cache proc (invalidationKeys, remoteSchema) -> do
           Inc.dependOn -< Inc.selectKeyD (_arsqName remoteSchema) invalidationKeys
           (| withRecordInconsistency (liftEitherA <<< bindA -<
-               runExceptT $ addRemoteSchemaP2Setup remoteSchema)
+               runExceptT $ addRemoteSchemaP2Setup env remoteSchema)
            |) (mkRemoteSchemaMetadataObject remoteSchema)
 
     -- Builds the GraphQL schema and merges in remote schemas. This function is kind of gross, as

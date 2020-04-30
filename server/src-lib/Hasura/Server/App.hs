@@ -25,6 +25,7 @@ import qualified Data.CaseInsensitive                   as CI
 import qualified Data.HashMap.Strict                    as M
 import qualified Data.HashSet                           as S
 import qualified Data.Text                              as T
+import qualified Data.Environment                       as E
 import qualified Database.PG.Query                      as Q
 import qualified Network.HTTP.Client                    as HTTP
 import qualified Network.HTTP.Types                     as HTTP
@@ -296,8 +297,8 @@ mkSpockAction serverCtx qErrEncoder qErrModifier apiHandler = do
 
 v1QueryHandler
   :: (HasVersion, MonadIO m, MonadBaseControl IO m, MetadataApiAuthorization m)
-  => RQLQuery -> Handler m (HttpResponse EncJSON)
-v1QueryHandler query = do
+  => E.Environment -> RQLQuery -> Handler m (HttpResponse EncJSON)
+v1QueryHandler env query = do
   userInfo <- asks hcUser
   authorizeMetadataApi query userInfo
   scRef <- scCacheRef . hcServerCtx <$> ask
@@ -315,7 +316,7 @@ v1QueryHandler query = do
       sqlGenCtx <- scSQLGenCtx . hcServerCtx <$> ask
       pgExecCtx <- scPGExecCtx . hcServerCtx <$> ask
       instanceId <- scInstanceId . hcServerCtx <$> ask
-      runQuery pgExecCtx instanceId userInfo schemaCache httpMgr sqlGenCtx (SystemDefined False) query
+      runQuery env pgExecCtx instanceId userInfo schemaCache httpMgr sqlGenCtx (SystemDefined False) query
 
 v1Alpha1GQHandler
   :: (HasVersion, MonadIO m)
@@ -420,11 +421,11 @@ queryParsers =
 
 legacyQueryHandler
   :: (HasVersion, MonadIO m, MonadBaseControl IO m, MetadataApiAuthorization m)
-  => TableName -> T.Text -> Object
+  => E.Environment -> TableName -> T.Text -> Object
   -> Handler m (HttpResponse EncJSON)
-legacyQueryHandler tn queryType req =
+legacyQueryHandler env tn queryType req =
   case M.lookup queryType queryParsers of
-    Just queryParser -> getLegacyQueryParser queryParser qt req >>= v1QueryHandler . RQV1
+    Just queryParser -> getLegacyQueryParser queryParser qt req >>= v1QueryHandler env . RQV1
     Nothing          -> throw404 "No such resource exists"
   where
     qt = QualifiedObject publicSchema tn
@@ -455,7 +456,8 @@ mkWaiApp
      , MetadataApiAuthorization m
      , LA.Forall (LA.Pure m)
      )
-  => Q.TxIsolation
+  => E.Environment
+  -> Q.TxIsolation
   -> L.Logger L.Hasura
   -> SQLGenCtx
   -> Bool
@@ -473,7 +475,7 @@ mkWaiApp
   -> E.PlanCacheOptions
   -> ResponseInternalErrorsConfig
   -> m HasuraApp
-mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg enableConsole consoleAssetsDir
+mkWaiApp env isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg enableConsole consoleAssetsDir
          enableTelemetry instanceId apis lqOpts planCacheOptions responseErrorsConfig = do
 
     (planCache, schemaCacheRef, cacheBuiltTime) <- migrateAndInitialiseSchemaCache
@@ -509,7 +511,7 @@ mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg ena
       liftIO $ EKG.registerCounter "ekg.server_timestamp_ms" getTimeMs ekgStore
 
     spockApp <- liftWithStateless $ \lowerIO ->
-      Spock.spockAsApp $ Spock.spockT lowerIO $ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry
+      Spock.spockAsApp $ Spock.spockT lowerIO $ (httpApp env) corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry
 
     let wsServerApp = WS.createWSServerApp mode wsServerEnv
         stopWSServer = WS.stopWSServerApp wsServerEnv
@@ -528,7 +530,7 @@ mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg ena
           adminRunCtx = RunCtx adminUserInfo httpManager sqlGenCtx
       currentTime <- liftIO getCurrentTime
       initialiseResult <- runExceptT $ peelRun adminRunCtx pgExecCtx Q.ReadWrite do
-        (,) <$> migrateCatalog currentTime <*> liftTx fetchLastUpdate
+        (,) <$> migrateCatalog env currentTime <*> liftTx fetchLastUpdate
 
       ((migrationResult, schemaCache), lastUpdateEvent) <-
         initialiseResult `onLeft` \err -> do
@@ -549,13 +551,14 @@ mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg ena
 
 httpApp
   :: (HasVersion, MonadIO m, MonadBaseControl IO m, ConsoleRenderer m, HttpLog m, UserAuthentication m, MetadataApiAuthorization m)
-  => CorsConfig
+  => E.Environment
+  -> CorsConfig -- TODO: Use the serverCtx for this?
   -> ServerCtx
   -> Bool
   -> Maybe Text
   -> Bool
   -> Spock.SpockT m ()
-httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = do
+httpApp env corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = do
 
     -- cors middleware
     unless (isCorsDisabled corsCfg) $
@@ -585,11 +588,11 @@ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = do
       Spock.post "v1alpha1/graphql/explain" gqlExplainAction
 
       Spock.post "v1/query" $ spockAction encodeQErr id $
-        mkPostHandler $ mkAPIRespHandler v1QueryHandler
+        mkPostHandler $ mkAPIRespHandler (v1QueryHandler env)
 
       Spock.post ("api/1/table" <//> Spock.var <//> Spock.var) $ \tableName queryType ->
         mkSpockAction serverCtx encodeQErr id $ mkPostHandler $
-          mkAPIRespHandler $ legacyQueryHandler (TableName tableName) queryType
+          mkAPIRespHandler $ (legacyQueryHandler env) (TableName tableName) queryType
 
     when enablePGDump $
 

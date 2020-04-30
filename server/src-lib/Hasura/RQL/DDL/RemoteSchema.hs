@@ -12,6 +12,7 @@ module Hasura.RQL.DDL.RemoteSchema
 import           Hasura.EncJSON
 import           Hasura.Prelude
 
+import qualified Data.Environment            as E
 import qualified Data.Aeson                  as J
 import qualified Data.HashMap.Strict         as Map
 import qualified Data.HashSet                as S
@@ -30,10 +31,12 @@ runAddRemoteSchema
      , MonadIO m
      , HasHttpManager m
      )
-  => AddRemoteSchemaQuery -> m EncJSON
-runAddRemoteSchema q = do
+  => E.Environment
+  -> AddRemoteSchemaQuery
+  -> m EncJSON
+runAddRemoteSchema env q = do
   addRemoteSchemaP1 name
-  addRemoteSchemaP2 q
+  addRemoteSchemaP2 env q
   buildSchemaCacheFor $ MORemoteSchema name
   pure successMsg
   where
@@ -50,17 +53,22 @@ addRemoteSchemaP1 name = do
 
 addRemoteSchemaP2Setup
   :: (HasVersion, QErrM m, MonadIO m, HasHttpManager m)
-  => AddRemoteSchemaQuery -> m RemoteSchemaCtx
-addRemoteSchemaP2Setup (AddRemoteSchemaQuery name def _) = do
+  => E.Environment
+  -> AddRemoteSchemaQuery
+  -> m RemoteSchemaCtx
+addRemoteSchemaP2Setup env (AddRemoteSchemaQuery name def _) = do
   httpMgr <- askHttpManager
-  rsi <- validateRemoteSchemaDef def
+  rsi <- validateRemoteSchemaDef env def
   gCtx <- fetchRemoteSchema httpMgr name rsi
   pure $ RemoteSchemaCtx name gCtx rsi
 
 addRemoteSchemaP2
-  :: (HasVersion, MonadTx m, MonadIO m, HasHttpManager m) => AddRemoteSchemaQuery -> m ()
-addRemoteSchemaP2 q = do
-  void $ addRemoteSchemaP2Setup q
+  :: (HasVersion, MonadTx m, MonadIO m, HasHttpManager m)
+  => E.Environment
+  -> AddRemoteSchemaQuery
+  -> m ()
+addRemoteSchemaP2 env q = do
+  void $ addRemoteSchemaP2Setup env q
   liftTx $ addRemoteSchemaToCatalog q
 
 runRemoveRemoteSchema

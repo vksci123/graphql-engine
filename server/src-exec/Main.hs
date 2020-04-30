@@ -14,19 +14,22 @@ import           Hasura.Server.Init
 import           Hasura.Server.Migrate      (downgradeCatalog, dropCatalog)
 import           Hasura.Server.Version
 
+import qualified Data.Environment           as E
 import qualified Data.ByteString.Lazy       as BL
 import qualified Data.ByteString.Lazy.Char8 as BLC
 import qualified Database.PG.Query          as Q
 
 main :: IO ()
-main = parseArgs >>= unAppM . runApp
+main = do
+  env <- E.getEnvironment
+  parseArgs >>= unAppM . runApp env
 
-runApp :: HGEOptions Hasura -> AppM ()
-runApp (HGEOptionsG rci hgeCmd) =
+runApp :: E.Environment -> HGEOptions Hasura -> AppM ()
+runApp env (HGEOptionsG rci hgeCmd) =
   withVersion $$(getVersionFromEnvironment) case hgeCmd of
     HCServe serveOptions -> do
       (initCtx, initTime) <- initialiseCtx hgeCmd rci
-      runHGEServer serveOptions initCtx initTime
+      runHGEServer env serveOptions initCtx initTime
     HCExport -> do
       (initCtx, _) <- initialiseCtx hgeCmd rci
       res <- runTx' initCtx fetchMetadata Q.ReadCommitted

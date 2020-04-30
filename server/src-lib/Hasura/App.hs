@@ -1,5 +1,6 @@
 {-# LANGUAGE RecordWildCards      #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE ScopedTypeVariables  #-}
 
 module Hasura.App where
 
@@ -12,7 +13,7 @@ import           Data.Aeson                           ((.=))
 import           Data.Time.Clock                      (UTCTime)
 import           GHC.AssertNF
 import           Options.Applicative
-import           System.Environment                   (getEnvironment, lookupEnv)
+import           System.Environment                   (getEnvironment)
 import           System.Exit                          (exitFailure)
 
 import qualified Control.Concurrent.Async.Lifted.Safe as LA
@@ -22,6 +23,7 @@ import qualified Data.ByteString.Char8                as BC
 import qualified Data.ByteString.Lazy.Char8           as BLC
 import qualified Data.Set                             as Set
 import qualified Data.Text                            as T
+import qualified Data.Environment                     as E
 import qualified Data.Time.Clock                      as Clock
 import qualified Data.Yaml                            as Y
 import qualified Database.PG.Query                    as Q
@@ -83,7 +85,7 @@ parseHGECommand =
 parseArgs :: EnabledLogTypes impl => IO (HGEOptions impl)
 parseArgs = do
   rawHGEOpts <- execParser opts
-  env <- getEnvironment
+  env <- getEnvironment -- TODO: See if we can reuse E.Environment rather than this again --- Shouldn't matter given that this is invoked only when parsing options
   let eitherOpts = runWithEnv env $ mkHGEOptions rawHGEOpts
   either printErrExit return eitherOpts
   where
@@ -191,12 +193,13 @@ runHGEServer
      , ConsoleRenderer m
      , LA.Forall (LA.Pure m)
      )
-  => ServeOptions impl
+  => E.Environment
+  -> ServeOptions impl
   -> InitCtx
   -> UTCTime
   -- ^ start time
   -> m ()
-runHGEServer ServeOptions{..} InitCtx{..} initTime = do
+runHGEServer env ServeOptions{..} InitCtx{..} initTime = do
   -- Comment this to enable expensive assertions from "GHC.AssertNF". These will log lines to
   -- STDOUT containing "not in normal form". In the future we could try to integrate this into
   -- our tests. For now this is a development tool.
@@ -213,7 +216,8 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
   authMode <- either (printErrExit . T.unpack) return authModeRes
 
   HasuraApp app cacheRef cacheInitTime shutdownApp <-
-    mkWaiApp soTxIso
+    mkWaiApp env
+             soTxIso
              logger
              sqlGenCtx
              soEnableAllowlist
@@ -316,13 +320,16 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
                             LevelInfo "event_triggers" ((show count) ++ " events were updated")
 
     getFromEnv :: (Read a) => a -> String -> IO a
-    getFromEnv defaults env = do
-      mEnv <- lookupEnv env
-      let mRes = case mEnv of
-            Nothing  -> Just defaults
-            Just val -> readMaybe val
-          eRes = maybe (Left $ "Wrong expected type for environment variable: " <> env) Right mRes
-      either printErrExit return eRes
+    getFromEnv defaults key = either printErrExit return eRes
+      where
+        mEnv :: Maybe String
+        mEnv = E.lookupEnv env key
+
+        mRes = case mEnv of
+              Nothing  -> Just defaults
+              Just val -> readMaybe val
+
+        eRes = maybe (Left $ "Wrong expected type for environment variable: " <> key) Right mRes
 
     runTx :: Q.PGPool -> Q.TxMode -> Q.TxE QErr a -> IO (Either QErr a)
     runTx pool txLevel tx =
@@ -370,15 +377,15 @@ execQuery
      , UserInfoM m
      , HasSystemDefined m
      )
-  => BLC.ByteString
+  => E.Environment
+  -> BLC.ByteString
   -> m BLC.ByteString
-execQuery queryBs = do
+execQuery env queryBs = do
   query <- case A.decode queryBs of
     Just jVal -> decodeValue jVal
     Nothing   -> throw400 InvalidJSON "invalid json"
   buildSchemaCacheStrict
-  encJToLBS <$> runQueryM query
-
+  encJToLBS <$> (runQueryM env) query
 
 instance HttpLog AppM where
   logHttpError logger userInfoM reqId httpReq req qErr headers =

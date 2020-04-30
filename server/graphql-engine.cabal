@@ -373,6 +373,7 @@ library
                      , Control.Concurrent.Extended
                      , Control.Lens.Extended
                      , Data.Aeson.Extended
+                     , Data.Environment
                      , Data.List.Extended
                      , Data.HashMap.Strict.Extended
                      , Data.HashMap.Strict.InsOrd.Extended

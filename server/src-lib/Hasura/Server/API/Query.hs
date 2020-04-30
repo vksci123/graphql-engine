@@ -12,6 +12,7 @@ import           Language.Haskell.TH.Syntax         (Lift)
 
 import qualified Data.HashMap.Strict                as HM
 import qualified Data.Text                          as T
+import qualified Data.Environment                   as E
 import qualified Database.PG.Query                  as Q
 import qualified Network.HTTP.Client                as HTTP
 
@@ -179,12 +180,13 @@ recordSchemaUpdate instanceId invalidations =
 
 runQuery
   :: (HasVersion, MonadIO m, MonadError QErr m)
-  => PGExecCtx -> InstanceId
+  => E.Environment 
+  -> PGExecCtx -> InstanceId
   -> UserInfo -> RebuildableSchemaCache Run -> HTTP.Manager
   -> SQLGenCtx -> SystemDefined -> RQLQuery -> m (EncJSON, RebuildableSchemaCache Run)
-runQuery pgExecCtx instanceId userInfo sc hMgr sqlGenCtx systemDefined query = do
+runQuery env pgExecCtx instanceId userInfo sc hMgr sqlGenCtx systemDefined query = do
   accessMode <- getQueryAccessMode query
-  resE <- runQueryM query
+  resE <- runQueryM env query
     & runHasSystemDefinedT systemDefined
     & runCacheRWT sc
     & peelRun runCtx pgExecCtx accessMode
@@ -323,9 +325,10 @@ runQueryM
      , MonadIO m, HasHttpManager m, HasSQLGenCtx m
      , HasSystemDefined m
      )
-  => RQLQuery
+  => E.Environment
+  -> RQLQuery
   -> m EncJSON
-runQueryM rq = withPathK "args" $ case rq of
+runQueryM env rq = withPathK "args" $ case rq of
   RQV1 q -> runQueryV1M q
   RQV2 q -> runQueryV2M q
   where
@@ -367,7 +370,7 @@ runQueryM rq = withPathK "args" $ case rq of
       RQDelete q                   -> runDelete q
       RQCount  q                   -> runCount q
 
-      RQAddRemoteSchema    q       -> runAddRemoteSchema q
+      RQAddRemoteSchema    q       -> runAddRemoteSchema env q
       RQRemoveRemoteSchema q       -> runRemoveRemoteSchema q
       RQReloadRemoteSchema q       -> runReloadRemoteSchema q
 
@@ -400,7 +403,7 @@ runQueryM rq = withPathK "args" $ case rq of
 
       RQSetCustomTypes q           -> runSetCustomTypes q
 
-      RQBulk qs                    -> encJFromList <$> indexedMapM runQueryM qs
+      RQBulk qs                    -> encJFromList <$> indexedMapM (runQueryM env) qs
 
     runQueryV2M = \case
       RQV2TrackTable q           -> runTrackTableV2Q q
