@@ -22,7 +22,7 @@ import qualified Database.PG.Query          as Q
 main :: IO ()
 main = do
   env <- E.getEnvironment
-  parseArgs >>= unAppM . runApp env
+  parseArgs >>= unAppM . runApp env 
 
 runApp :: E.Environment -> HGEOptions Hasura -> AppM ()
 runApp env (HGEOptionsG rci hgeCmd) =
@@ -45,8 +45,8 @@ runApp env (HGEOptionsG rci hgeCmd) =
       queryBs <- liftIO BL.getContents
       let sqlGenCtx = SQLGenCtx False
       res <- runAsAdmin _icPgPool sqlGenCtx _icHttpManager do
-        schemaCache <- buildRebuildableSchemaCache
-        execQuery queryBs
+        schemaCache <- buildRebuildableSchemaCache env
+        execQuery env queryBs
           & runHasSystemDefinedT (SystemDefined False)
           & runCacheRWT schemaCache
           & fmap (\(res, _, _) -> res)
