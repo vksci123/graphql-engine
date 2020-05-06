@@ -243,6 +243,7 @@ library
                      , Hasura.Session
 
                      , Data.Aeson.Ordered
+                     , Data.Environment
 
   other-modules:       Hasura.Incremental.Select
                      , Hasura.Incremental.Internal.Cache
@@ -373,7 +374,6 @@ library
                      , Control.Concurrent.Extended
                      , Control.Lens.Extended
                      , Data.Aeson.Extended
-                     , Data.Environment
                      , Data.List.Extended
                      , Data.HashMap.Strict.Extended
                      , Data.HashMap.Strict.InsOrd.Extended
